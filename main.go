@@ -102,7 +102,7 @@ func (b *CustomBroadcast) Message() []byte {
 
 func (b *CustomBroadcast) Finished() {}
 
-func main() {
+func main1() {
 	port := flag.Int("port", 7946, "Port to bind for this node")
 	message := flag.String("message", "", "Message to send to the cluster")
 	flag.Parse()
