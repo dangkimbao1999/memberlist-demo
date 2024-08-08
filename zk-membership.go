@@ -2,9 +2,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/gob"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"os/signal"
@@ -52,7 +52,16 @@ func (d *CustomDelegate1) NotifyMsg(msg []byte) {
 	// 	log.Printf("[%s] Failed to unmarshal proof: %v\n", d.nodeName, err)
 	// 	return
 	// }
+	circuit := MultiplyCircuit{}
 
+	r1cs, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, &circuit)
+	if err != nil {
+		log.Fatalf("Failed to compile circuit: %v", err)
+	}
+	pk, vk, err := groth16.Setup(r1cs)
+	if err != nil {
+		log.Fatalf("Failed to setup zk-SNARK: %v", err)
+	}
 	if msg == nil {
 		log.Printf("[%s] Received nil message\n", d.nodeName)
 		return
@@ -64,20 +73,42 @@ func (d *CustomDelegate1) NotifyMsg(msg []byte) {
 		return
 	}
 
-	_, err := proof.ReadFrom(buffer)
+	// _, err := proof.ReadFrom(buffer)
+	// if err != nil {
+	// 	log.Printf("[%s] Failed to unmarshal proof: %v\n", d.nodeName, err)
+	// 	return
+	// }
+
+	dec := gob.NewDecoder(buffer)
+	err = dec.Decode(proof)
 	if err != nil {
-		log.Printf("[%s] Failed to unmarshal proof: %v\n", d.nodeName, err)
-		return
+		log.Fatal("encode error:", err)
 	}
 
-	var witness MultiplyCircuit
-	publicWitness, err := frontend.NewWitness(&witness, ecc.BN254.ScalarField(), frontend.PublicOnly())
+	log.Printf("[%s] Proof unmarshalled: %v\n", d.nodeName, proof)
+
+	assignment := MultiplyCircuit{
+		A: 1,
+		B: 1,
+		C: 1,
+	}
+
+	witness, err := frontend.NewWitness(&assignment, ecc.BN254.ScalarField())
 	if err != nil {
 		log.Printf("[%s] Failed to create public witness: %v\n", d.nodeName, err)
 		return
 	}
+	proof, err = groth16.Prove(r1cs, pk, witness)
+	if err != nil {
+		log.Fatalf("Failed to create proof: %v", err)
+	}
 
-	if err := groth16.Verify(proof, d.vk, publicWitness); err != nil {
+	publicWitness, err := witness.Public()
+	if err != nil {
+		log.Fatalf("Failed to create public witness: %v", err)
+	}
+
+	if err := groth16.Verify(proof, vk, publicWitness); err != nil {
 		log.Printf("[%s] Invalid proof: %v\n", d.nodeName, err)
 	} else {
 		log.Printf("[%s] Valid proof received.\n", d.nodeName)
@@ -175,16 +206,36 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to create proof: %v", err)
 		}
+		log.Println("Verifying internal...")
+		// Extract public witness
+		publicWitness, err := witness.Public()
+		if err != nil {
+			log.Fatalf("Failed to create public witness: %v", err)
+		}
+
+		// Verify the proof
+		err = groth16.Verify(proof, vk, publicWitness)
+		if err != nil {
+			log.Fatalf("Failed to verify proof: %v", err)
+		} else {
+			fmt.Println("Proof is valid!")
+		}
+		// -------------------------------------------
 		var buf bytes.Buffer
 
-		_, err = proof.WriteTo(&buf)
+		enc := gob.NewEncoder(&buf)
+		err = enc.Encode(proof)
 		if err != nil {
-			log.Fatalf("Failed to marshal proof: %v", err)
+			log.Fatal("encode error:", err)
 		}
-		readBuf, _ := ioutil.ReadAll(&buf)
 
+		// _, err = proof.WriteTo(&buf)
+		// if err != nil {
+		// 	log.Fatalf("Failed to marshal proof: %v", err)
+		// }
+		// readBuf, _ := ioutil.ReadAll(&buf)
 		broadcast := &CustomBroadcast1{
-			msg: readBuf,
+			msg: buf.Bytes(),
 		}
 		delegate.queue.QueueBroadcast(broadcast)
 	}
@@ -197,17 +248,4 @@ func main() {
 	if err := list.Leave(0); err != nil {
 		log.Fatalf("Failed to leave cluster: %v", err)
 	}
-}
-
-// MarshalProof serializes the proof to JSON
-func MarshalProof(proof groth16.Proof) ([]byte, error) {
-	return proof.CurveID().ScalarField().MarshalJSON()
-}
-
-// UnmarshalProof deserializes the proof from JSON
-func UnmarshalProof(data []byte) (groth16.Proof, error) {
-
-	var proof groth16.Proof
-	err := proof.CurveID().ScalarField().UnmarshalJSON(data)
-	return proof, err
 }

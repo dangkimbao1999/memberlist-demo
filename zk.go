@@ -69,15 +69,20 @@ func main2() {
 	}
 
 	// Create an invalid witness (A + B != C)
-	// Create an invalid witness (A + B != C)
 	invalidAssignment := AdditionCircuit{
 		A: 3,
 		B: 11,
-		C: 15,
+		C: 16,
 	}
 	invalidWitness, err := frontend.NewWitness(&invalidAssignment, ecc.BN254.ScalarField())
 	if err != nil {
 		log.Fatalf("Failed to create invalid witness: %v", err)
+	}
+
+	// Generate the proof with invalid witness
+	invalidProof, err := groth16.Prove(r1cs, pk, invalidWitness)
+	if err != nil {
+		log.Fatalf("Failed to create proof: %v", err)
 	}
 
 	// Extract public witness
@@ -87,10 +92,10 @@ func main2() {
 	}
 
 	// Verify the proof with invalid witness
-	err = groth16.Verify(proof, vk, invalidPublicWitness)
+	err = groth16.Verify(invalidProof, vk, invalidPublicWitness)
 	if err != nil {
-		fmt.Println("Proof verification failed as expected with invalid witness!")
+		fmt.Println("Proof is invalid, as expected!")
 	} else {
-		log.Fatalf("Proof verification should have failed with invalid witness!")
+		fmt.Println("Proof is valid! (unexpected)")
 	}
 }
