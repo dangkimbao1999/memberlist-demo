@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/gob"
 	"flag"
 	"fmt"
 	"log"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/backend/groth16"
+	"github.com/consensys/gnark/backend/witness"
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/frontend/cs/r1cs"
 	"github.com/hashicorp/memberlist"
@@ -46,12 +46,6 @@ func (d *CustomDelegate1) NotifyMsg(msg []byte) {
 
 	var proof groth16.Proof = groth16.NewProof(ecc.BN254)
 
-	// cs := groth16.NewCS(ecc.BN254)
-	// _, err := proof.ReadFrom(bytes.NewBuffer(msg))
-	// if err != nil {
-	// 	log.Printf("[%s] Failed to unmarshal proof: %v\n", d.nodeName, err)
-	// 	return
-	// }
 	circuit := MultiplyCircuit{}
 
 	r1cs, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, &circuit)
@@ -73,40 +67,23 @@ func (d *CustomDelegate1) NotifyMsg(msg []byte) {
 		return
 	}
 
-	// _, err := proof.ReadFrom(buffer)
-	// if err != nil {
-	// 	log.Printf("[%s] Failed to unmarshal proof: %v\n", d.nodeName, err)
-	// 	return
-	// }
-
-	dec := gob.NewDecoder(buffer)
-	err = dec.Decode(proof)
+	witness, err := witness.New(ecc.BN254.ScalarField())
 	if err != nil {
-		log.Fatal("encode error:", err)
+		log.Fatalf("Failed to create new witness: %v", err)
+
 	}
 
-	log.Printf("[%s] Proof unmarshalled: %v\n", d.nodeName, proof)
-
-	assignment := MultiplyCircuit{
-		A: 1,
-		B: 1,
-		C: 1,
-	}
-
-	witness, err := frontend.NewWitness(&assignment, ecc.BN254.ScalarField())
+	// Binary unmarshalling
+	err = witness.UnmarshalBinary(msg)
 	if err != nil {
-		log.Printf("[%s] Failed to create public witness: %v\n", d.nodeName, err)
-		return
+		log.Fatalf("Failed to unmarshal witness msg: %v", err)
+
 	}
 	proof, err = groth16.Prove(r1cs, pk, witness)
 	if err != nil {
 		log.Fatalf("Failed to create proof: %v", err)
 	}
-
-	publicWitness, err := witness.Public()
-	if err != nil {
-		log.Fatalf("Failed to create public witness: %v", err)
-	}
+	publicWitness, _ := witness.Public()
 
 	if err := groth16.Verify(proof, vk, publicWitness); err != nil {
 		log.Printf("[%s] Invalid proof: %v\n", d.nodeName, err)
@@ -193,12 +170,19 @@ func main() {
 		// Create a valid witness (A * B = C)
 		assignment := MultiplyCircuit{
 			A: 1,
-			B: 1,
-			C: 1,
+			B: 2,
+			C: 2,
 		}
 		witness, err := frontend.NewWitness(&assignment, ecc.BN254.ScalarField())
 		if err != nil {
 			log.Fatalf("Failed to create witness: %v", err)
+		}
+
+		// Binary marshalling
+		data, err := witness.MarshalBinary()
+		if err != nil {
+			log.Fatalf("Failed to serialize witness: %v", err)
+
 		}
 
 		// Generate the proof
@@ -213,6 +197,7 @@ func main() {
 			log.Fatalf("Failed to create public witness: %v", err)
 		}
 
+		log.Print(witness)
 		// Verify the proof
 		err = groth16.Verify(proof, vk, publicWitness)
 		if err != nil {
@@ -221,13 +206,13 @@ func main() {
 			fmt.Println("Proof is valid!")
 		}
 		// -------------------------------------------
-		var buf bytes.Buffer
+		// var buf bytes.Buffer
 
-		enc := gob.NewEncoder(&buf)
-		err = enc.Encode(proof)
-		if err != nil {
-			log.Fatal("encode error:", err)
-		}
+		// enc := gob.NewEncoder(&buf)
+		// err = enc.Encode(publicWitness)
+		// if err != nil {
+		// 	log.Fatal("encode error:", err)
+		// }
 
 		// _, err = proof.WriteTo(&buf)
 		// if err != nil {
@@ -235,7 +220,7 @@ func main() {
 		// }
 		// readBuf, _ := ioutil.ReadAll(&buf)
 		broadcast := &CustomBroadcast1{
-			msg: buf.Bytes(),
+			msg: data,
 		}
 		delegate.queue.QueueBroadcast(broadcast)
 	}
